@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/nuka-lab-logo.png" alt="NUKA LAB Logo" width="280"/>
+  <img src="./assets/nuka-lab-logo.jpg" alt="NUKA LAB Logo" width="280"/>
 </p>
 
 <h1 align="center">NUKA LAB</h1>
