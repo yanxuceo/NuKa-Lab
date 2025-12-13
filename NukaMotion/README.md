@@ -35,6 +35,12 @@ By enforcing motion as a wake-up condition, NukaMotion:
 
 ---
 
+## 🎥 Demo
+
+![NukaMotion demo](NukaMotion_demo.gif)
+
+---
+
 ## 🏗 System Overview
 
 **Hardware**
