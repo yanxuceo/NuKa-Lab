@@ -5,16 +5,14 @@ import json
 import sqlite3
 import threading
 import time
+import re
+import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import re
-from datetime import timedelta
-
-from dateparser.conf import SettingValidationError
-
 import dateparser
+from dateparser.conf import SettingValidationError
 import requests
 
 TZ_NAME = "Europe/Berlin"
@@ -24,6 +22,76 @@ OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_MODEL = "qwen2.5:3b"
 
 DB_PATH = "nuka.db"
+
+# -------------------------
+# Encouragement optimization
+# -------------------------
+# Milestones that will trigger an LLM call for encouragement (fast most of the time)
+DEFAULT_MILESTONES = {1, 3, 5, 8, 9}  # plus target reps
+# Local fast phrases (no LLM, super quick)
+ENCOURAGE_POOL_EN = [
+    "Nice!",
+    "Good rep!",
+    "Keep going!",
+    "Strong squat!",
+    "Great form!",
+    "Solid!",
+    "You got this!",
+    "Stay steady!",
+    "Keep the rhythm!",
+    "Power up!",
+    "Strong legs!",
+    "Clean rep!",
+    "Let's go!",
+    "Awesome!",
+    "Almost there!",
+    "Breathe and squat!",
+    "Great work!",
+    "Focus!",
+    "Smooth!",
+    "One rep at a time!",
+]
+ENCOURAGE_POOL_ZH = [
+    "漂亮！",
+    "好！",
+    "继续！",
+    "很稳！",
+    "动作不错！",
+    "节奏很好！",
+    "加油！",
+    "稳住！",
+    "很强！",
+    "就这样！",
+    "腿很给力！",
+    "再来一个！",
+    "冲！",
+    "不错！",
+    "快到了！",
+    "呼吸稳住！",
+    "干得漂亮！",
+    "专注！",
+    "很顺！",
+    "一步一步来！",
+]
+
+
+def detect_lang(text: str) -> str:
+    # very simple CJK detection
+    if any("\u4e00" <= ch <= "\u9fff" for ch in (text or "")):
+        return "zh"
+    return "en"
+
+
+def pick_local_phrase(lang: str, remaining: int, done: bool) -> str:
+    if done:
+        return "完成！" if lang == "zh" else "Done!"
+    pool = ENCOURAGE_POOL_ZH if lang == "zh" else ENCOURAGE_POOL_EN
+    # add a tiny hint when close
+    if remaining == 1:
+        return "最后一个！" if lang == "zh" else "One more!"
+    if remaining == 2:
+        return "还差两个！" if lang == "zh" else "Two left!"
+    return random.choice(pool)
 
 
 # -------------------------
@@ -68,18 +136,18 @@ def now_local() -> datetime:
 
 
 def iso(dt: datetime) -> str:
-    # Always keep timezone-aware ISO 8601
     return dt.astimezone(TZ).isoformat(timespec="seconds")
 
 
-
-
-
+# -------------------------
+# Time parsing (robust)
+# -------------------------
 def parse_time_text(time_text: str, base: datetime | None = None) -> datetime | None:
     """
     Robust time parser:
       - Never crashes.
-      - Tries dateparser first (with safe settings).
+      - HARD-RULES for common ambiguous cases (tomorrow morning X).
+      - Tries dateparser first (safe settings).
       - Falls back to regex for relative times (CN/EN).
     """
     if base is None:
@@ -91,8 +159,68 @@ def parse_time_text(time_text: str, base: datetime | None = None) -> datetime | 
 
     low = text.lower()
 
-    # ---------- Layer 1: dateparser (safe settings) ----------
-    # IMPORTANT: do NOT use unsupported settings.
+    # ==========================================================
+    # HARD RULE 1: "tomorrow morning X" / "明天早上X点" / "morgen früh X"
+    # Fix dateparser ambiguity for "tomorrow morning 7 (o'clock)" etc.
+    # ==========================================================
+    # Accept:
+    #  - tomorrow morning 7 / tomorrow morning seven / tomorrow morning 7 o'clock
+    #  - 明天早上7 / 明天早上七点
+    #  - morgen früh 7 / morgen morgen 7 Uhr (loosely)
+    #
+    # Notes:
+    #  - If user says "morning/早上/früh" and gives an hour without am/pm,
+    #    we force it into 05:00–11:00 and set it to TOMORROW at HH:00.
+    #
+    #  - This is deterministic and avoids "+24h/+48h" surprises.
+    # ==========================================================
+    word_to_int = {
+        "one": 1, "a": 1, "an": 1,
+        "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "eleven": 11, "twelve": 12,
+    }
+    zh_to_int = {
+        "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+        "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+        "十一": 11, "十二": 12,
+    }
+
+    # English / German style: tomorrow/morgen + morning/früh/morgen + hour
+    m = re.search(
+        r'\b(tomorrow|morgen|明天)\b.*\b(morning|früh|frueh|morgen|早上|上午)\b.*\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b',
+        low
+    )
+    if m:
+        h_raw = m.group(3)
+        if h_raw.isdigit():
+            hour = int(h_raw)
+        else:
+            hour = word_to_int.get(h_raw, None)
+
+        if hour is not None:
+            # morning heuristic clamp
+            hour = max(5, min(hour, 11))
+            day = (base + timedelta(days=1)).date()
+            return datetime(day.year, day.month, day.day, hour, 0, 0, tzinfo=TZ)
+
+    # Chinese style: 明天早上七点 / 明天上午7点 / 明天早上7
+    m = re.search(r'(明天).*(早上|上午).*(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*(点|點)?', text)
+    if m:
+        h_raw = m.group(3)
+        if h_raw.isdigit():
+            hour = int(h_raw)
+        else:
+            hour = zh_to_int.get(h_raw, None)
+
+        if hour is not None:
+            hour = max(5, min(hour, 11))
+            day = (base + timedelta(days=1)).date()
+            return datetime(day.year, day.month, day.day, hour, 0, 0, tzinfo=TZ)
+
+    # ==========================================================
+    # Layer 1: dateparser (safe settings)
+    # ==========================================================
     settings = {
         "TIMEZONE": TZ_NAME,
         "RETURN_AS_TIMEZONE_AWARE": True,
@@ -102,16 +230,18 @@ def parse_time_text(time_text: str, base: datetime | None = None) -> datetime | 
 
     dt = None
     try:
-        # Hint languages to improve CN/EN parsing; supported across many versions
-        dt = dateparser.parse(text, settings=settings, languages=["en", "zh"])
+        dt = dateparser.parse(text, settings=settings, languages=["en", "zh", "de"])
     except SettingValidationError:
-        # If some setting key is not supported in this dateparser version, retry with minimal settings
         try:
-            dt = dateparser.parse(text, settings={
-                "PREFER_DATES_FROM": "future",
-                "RELATIVE_BASE": base,
-                "RETURN_AS_TIMEZONE_AWARE": True,
-            }, languages=["en", "zh"])
+            dt = dateparser.parse(
+                text,
+                settings={
+                    "PREFER_DATES_FROM": "future",
+                    "RELATIVE_BASE": base,
+                    "RETURN_AS_TIMEZONE_AWARE": True,
+                },
+                languages=["en", "zh", "de"],
+            )
         except Exception:
             dt = None
     except Exception:
@@ -122,9 +252,10 @@ def parse_time_text(time_text: str, base: datetime | None = None) -> datetime | 
             dt = dt.replace(tzinfo=TZ)
         return dt.astimezone(TZ)
 
-    # ---------- Layer 2: regex fallback (relative time, EN) ----------
-    # "in 1 minute", "in one minute", "1 minute later"
-    # digits
+    # ==========================================================
+    # Layer 2: regex fallback (relative EN digits)
+    # e.g. "in 2 minutes", "2 minutes", "2 min", "in 10 sec"
+    # ==========================================================
     m = re.search(r'\b(in\s*)?(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b', low)
     if m:
         n = int(m.group(2))
@@ -138,15 +269,17 @@ def parse_time_text(time_text: str, base: datetime | None = None) -> datetime | 
         if unit.startswith(("day", "d")):
             return base + timedelta(days=n)
 
-    # "one minute", "two minutes"
-    word_to_int = {
+    # ==========================================================
+    # Layer 2b: regex fallback (relative EN words)
+    # ==========================================================
+    word_to_int_small = {
         "one": 1, "a": 1, "an": 1,
         "two": 2, "three": 3, "four": 4, "five": 5,
         "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
     }
     m = re.search(r'\b(in\s*)?(a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s*(minute|hour|day)s?\b', low)
     if m:
-        n = word_to_int.get(m.group(2), None)
+        n = word_to_int_small.get(m.group(2), None)
         unit = m.group(3)
         if n is not None:
             if unit == "minute":
@@ -156,8 +289,10 @@ def parse_time_text(time_text: str, base: datetime | None = None) -> datetime | 
             if unit == "day":
                 return base + timedelta(days=n)
 
-    # ---------- Layer 3: regex fallback (relative time, CN) ----------
-    # "1分钟后", "2小时后", "10秒后", "3天后"
+    # ==========================================================
+    # Layer 3: regex fallback (relative CN)
+    # e.g. "1分钟后", "2小时后", "10秒后", "3天后"
+    # ==========================================================
     m = re.search(r'(\d+)\s*(秒|分钟|分|小时|天)\s*后', text)
     if m:
         n = int(m.group(1))
@@ -174,7 +309,6 @@ def parse_time_text(time_text: str, base: datetime | None = None) -> datetime | 
     return None
 
 
-
 # -------------------------
 # Ollama client helpers
 # -------------------------
@@ -187,7 +321,6 @@ def ollama_chat(messages, tools=None, temperature=0.2):
             "temperature": temperature,
         },
     }
-    # Ollama supports tools; we keep MVP with structured JSON in content for robustness
     if tools is not None:
         payload["tools"] = tools
 
@@ -199,7 +332,7 @@ def ollama_chat(messages, tools=None, temperature=0.2):
 def llm_intent(user_text: str) -> dict:
     """
     Phase A: return ONLY a JSON object describing intent.
-    We validate/repair with a couple retries.
+    Keep it fast and deterministic: temperature=0.
     """
     system = (
         "You are Nuka, a strict command parser for an alarm + squat system.\n"
@@ -225,9 +358,7 @@ def llm_intent(user_text: str) -> dict:
         "CHAT: {\"intent\":\"CHAT\",\"text\":\"...\"}\n"
         "\n"
         "Rules:\n"
-        "- If user says 'tomorrow morning 7', put that in time_text.\n"
-        "- If user says cancel 'tomorrow morning alarm', put that in which.\n"
-        "- If user says change 6 to 8, put from='tomorrow 6' to='tomorrow 8' if implied.\n"
+        "- Keep time_text/from/to/which in the user's original language. Do NOT translate.\n"
         "- target_reps defaults to 10 if not specified.\n"
     )
 
@@ -240,8 +371,6 @@ def llm_intent(user_text: str) -> dict:
     for _ in range(3):
         out = ollama_chat(msgs, temperature=0.0)
         content = out["message"]["content"].strip()
-
-        # Try strict JSON
         try:
             obj = json.loads(content)
             if not isinstance(obj, dict) or "intent" not in obj:
@@ -249,36 +378,50 @@ def llm_intent(user_text: str) -> dict:
             return obj
         except Exception as e:
             last_err = str(e)
-            # Ask the model to repair to valid JSON only
             msgs.append({"role": "assistant", "content": content})
-            msgs.append({
-                "role": "user",
-                "content": f"Fix: return ONLY valid JSON object. Error: {last_err}"
-            })
+            msgs.append({"role": "user", "content": f"Fix: return ONLY valid JSON object. Error: {last_err}"})
 
     return {"intent": "CHAT", "text": f"(parse failed) {user_text}"}
 
 
 def llm_say(style: str, context: dict) -> str:
     """
-    Phase B: generate user-facing text. style in: ring, encourage, refuse_stop, confirm
+    Phase B: generate user-facing text for ring/encourage/refuse_stop.
+    IMPORTANT:
+      - Only talk about squats + rep counting
+      - Never mention time-of-day/dates or other exercises
+      - Keep it short
     """
     system = (
-        "You are Nuka, a friendly fitness alarm assistant. "
-        "Be concise, energetic, and positive. 1-2 short sentences."
+        "You are Nuka, a squat alarm coach.\n"
+        "Rules:\n"
+        "- ONLY talk about SQUATS and REP counting.\n"
+        "- NEVER mention steps, push-ups, running, days, weeks, calendars.\n"
+        "- NEVER mention specific time-of-day or dates.\n"
+        "- Use ONLY numbers provided (current_reps/target_reps/remaining). Do not invent numbers.\n"
+        "- Output 1 short sentence, ideally <= 10 words.\n"
+        "- Language: if lang is 'zh' use Chinese, else use English.\n"
     )
-    user = {"style": style, "context": context}
+
+    safe_ctx = {
+        "style": style,
+        "exercise": "squat",
+        "lang": context.get("lang", "en"),
+        "current_reps": context.get("current_reps"),
+        "target_reps": context.get("target_reps"),
+        "remaining": context.get("remaining"),
+        "done": context.get("done"),
+    }
+
     msgs = [
         {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+        {"role": "user", "content": json.dumps(safe_ctx, ensure_ascii=False)},
     ]
-    out = ollama_chat(msgs, temperature=0.7)
+
+    out = ollama_chat(msgs, temperature=0.35)
     return out["message"]["content"].strip()
 
 
-# -------------------------
-# Runtime session state
-# -------------------------
 @dataclass
 class ActiveSession:
     alarm_id: int
@@ -287,6 +430,7 @@ class ActiveSession:
     current_reps: int
     target_reps: int
     started_at: datetime
+    lang: str = "en"
 
 
 class NukaCore:
@@ -294,8 +438,8 @@ class NukaCore:
         self.conn = db_conn()
         self.lock = threading.Lock()
         self.stop_flag = threading.Event()
+        self.default_lang = "en"
         self.active: ActiveSession | None = None
-
         self.scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
 
     # ---- Alarm CRUD ----
@@ -322,30 +466,21 @@ class NukaCore:
         return out
 
     def find_alarm_by_text(self, which: str) -> dict | None:
-        """
-        MVP heuristic:
-        - if which contains an integer -> treat as alarm_id
-        - else parse time_text and match nearest alarm within 2 hours
-        - else match label substring
-        """
         which = (which or "").strip()
         alarms = self.list_alarms()
         if not alarms:
             return None
 
-        # id match
         if which.isdigit():
             aid = int(which)
             for a in alarms:
                 if a["id"] == aid:
                     return a
 
-        # label match
         for a in alarms:
             if a["label"] and which and which.lower() in a["label"].lower():
                 return a
 
-        # time match
         dt = parse_time_text(which)
         if dt:
             target = dt
@@ -399,7 +534,6 @@ class NukaCore:
 
     # ---- Session / ring / reps ----
     def _start_session_for_alarm(self, alarm: dict):
-        # Create session record
         with self.lock:
             cur = self.conn.cursor()
             started = now_local()
@@ -409,6 +543,8 @@ class NukaCore:
             )
             self.conn.commit()
             sid = cur.lastrowid
+
+            # default language for ring/encourage can be English; you can make it smarter later
             self.active = ActiveSession(
                 alarm_id=alarm["id"],
                 session_id=sid,
@@ -416,23 +552,46 @@ class NukaCore:
                 current_reps=0,
                 target_reps=alarm["target_reps"],
                 started_at=started,
+                lang=self.default_lang,
+
             )
 
-        # user-facing ring message
+        # ring message (no time fed to model)
+        lang = self.active.lang if self.active else "en"
         msg = llm_say("ring", {
-            "alarm_time": alarm["time_iso"],
+            "current_reps": 0,
             "target_reps": alarm["target_reps"],
-            "label": alarm["label"]
+            "remaining": alarm["target_reps"],
+            "done": False,
+            "lang": lang
         })
         print(f"\n⏰ ALARM! {msg}")
         print(f"👉 Start squats now. Type 'rep' for each squat. Target: {alarm['target_reps']}\n")
-        # move to active
+
         with self.lock:
             if self.active:
                 self.active.state = "SQUAT_ACTIVE"
                 cur = self.conn.cursor()
                 cur.execute("UPDATE sessions SET state=? WHERE id=?", ("SQUAT_ACTIVE", self.active.session_id))
                 self.conn.commit()
+
+    def _encourage(self, cur_reps: int, target: int, done: bool, lang: str) -> str:
+        remaining = max(0, target - cur_reps)
+        # milestones trigger LLM (more “alive”), others use local fast phrases
+        milestones = set(DEFAULT_MILESTONES)
+        milestones.add(target)
+
+        if done or (cur_reps in milestones):
+            return llm_say("encourage", {
+                "current_reps": cur_reps,
+                "target_reps": target,
+                "remaining": remaining,
+                "done": done,
+                "lang": lang
+            })
+
+        return pick_local_phrase(lang=lang, remaining=remaining, done=done)
+
 
     def report_rep(self):
         with self.lock:
@@ -442,15 +601,17 @@ class NukaCore:
             self.active.current_reps += 1
             cur_reps = self.active.current_reps
             target = self.active.target_reps
+            lang = self.active.lang
 
             # persist
             cur = self.conn.cursor()
             cur.execute("UPDATE sessions SET current_reps=? WHERE id=?", (cur_reps, self.active.session_id))
             self.conn.commit()
 
-        # "beep"
+        # per-rep feedback: only beep (fast)
         print("🔔 ding")
 
+        # when done, unlock + speak ONE sentence (LLM once)
         if cur_reps >= target:
             with self.lock:
                 if self.active:
@@ -458,12 +619,18 @@ class NukaCore:
                     cur = self.conn.cursor()
                     cur.execute("UPDATE sessions SET state=? WHERE id=?", ("UNLOCKED", self.active.session_id))
                     self.conn.commit()
-            msg = llm_say("encourage", {"current": cur_reps, "target": target, "done": True})
+
+            # ONE LLM call only here
+            msg = llm_say("encourage", {
+                "current_reps": cur_reps,
+                "target_reps": target,
+                "remaining": 0,
+                "done": True,
+                "lang": lang
+            })
             print(f"✅ {cur_reps}/{target} {msg}")
             print("👉 You can now type 'stop' to stop the alarm.\n")
-        else:
-            msg = llm_say("encourage", {"current": cur_reps, "target": target, "done": False})
-            print(f"💪 {cur_reps}/{target} {msg}")
+
 
     def try_stop_alarm(self):
         with self.lock:
@@ -474,13 +641,16 @@ class NukaCore:
             cur = self.active.current_reps
             target = self.active.target_reps
             sid = self.active.session_id
+            lang = self.active.lang
 
         if state != "UNLOCKED":
-            msg = llm_say("refuse_stop", {"current": cur, "target": target})
-            print(f"❌ Can't stop yet. {msg} (remaining: {max(0, target-cur)})")
+            remaining = max(0, target - cur)
+            if lang == "zh":
+                print(f"❌ 还不能关！还差 {remaining} 个深蹲。")
+            else:
+                print(f"❌ Not yet! {remaining} squats remaining.")
             return
 
-        # stop and finalize
         with self.lock:
             cur2 = self.conn.cursor()
             cur2.execute("UPDATE sessions SET state=?, ended_at=? WHERE id=?",
@@ -488,13 +658,15 @@ class NukaCore:
             self.conn.commit()
             self.active = None
 
-        msg = llm_say("confirm", {"result": "stopped", "target": target})
-        print(f"🛑 Alarm stopped. {msg}\n")
+        # stop confirmation: NO LLM (fast + deterministic)
+        if lang == "zh":
+            print(f"🛑 闹钟已关闭。太棒了！你完成了 {target} 个深蹲！\n")
+        else:
+            print(f"🛑 Alarm stopped. Nice work — {target} squats done!\n")
 
     # ---- scheduler loop ----
     def _scheduler_loop(self):
         while not self.stop_flag.is_set():
-            # don't start new if active
             with self.lock:
                 active_exists = self.active is not None
             if not active_exists:
@@ -508,7 +680,6 @@ class NukaCore:
         if not alarms:
             return None
         nowt = now_local()
-        # find enabled alarm whose time <= now and not too old (grace window)
         grace = timedelta(seconds=10)
         due = []
         for a in alarms:
@@ -570,24 +741,37 @@ def main():
     core.start()
 
     print("Nuka MVP is running. Type /help for help.")
+    last_lang = "en"
+
     try:
         while True:
             s = input(">>> ").strip()
             if not s:
                 continue
+
+            last_lang = detect_lang(s)
+            core.default_lang = last_lang
+
+
             if s in ("/help", "help", "?"):
                 print(HELP_TEXT)
                 continue
             if s in ("exit", "quit"):
                 break
             if s == "rep":
+                # session language follows last command language (simple but effective for MVP)
+                with core.lock:
+                    if core.active:
+                        core.active.lang = last_lang
                 core.report_rep()
                 continue
             if s == "stop":
+                with core.lock:
+                    if core.active:
+                        core.active.lang = last_lang
                 core.try_stop_alarm()
                 continue
 
-            # Phase A: intent
             intent = llm_intent(s)
             it = intent.get("intent", "CHAT")
 
@@ -604,13 +788,20 @@ def main():
                 time_text = intent.get("time_text", "")
                 reps = int(intent.get("target_reps", 10) or 10)
                 label = intent.get("label", None)
+
                 dt = parse_time_text(time_text)
                 if not dt:
                     print(f"❌ Couldn't parse time: {time_text}")
                     continue
+
                 aid = core.create_alarm(dt, target_reps=reps, label=label)
-                msg = llm_say("confirm", {"result": "created", "alarm_id": aid, "time": iso(dt), "target_reps": reps})
-                print(f"✅ Created alarm #{aid} at {iso(dt)} (reps={reps}). {msg}")
+
+                # confirmation: NO LLM (fast + deterministic)
+                human = dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+                if last_lang == "zh":
+                    print(f"✅ 已创建闹钟 #{aid}：{human}（深蹲 {reps} 个解锁）。")
+                else:
+                    print(f"✅ Created alarm #{aid} at {human} (reps={reps}).")
                 continue
 
             if it == "CANCEL_ALARM":
@@ -620,8 +811,10 @@ def main():
                     print("❌ No matching alarm found.")
                     continue
                 ok = core.cancel_alarm(a["id"])
-                msg = llm_say("confirm", {"result": "canceled", "alarm_id": a["id"], "time": a["time_iso"]})
-                print(f"✅ Canceled alarm #{a['id']} ({a['time_iso']}). {msg}" if ok else "❌ Cancel failed.")
+                if last_lang == "zh":
+                    print(f"✅ 已取消闹钟 #{a['id']}（{a['time_iso']}）。" if ok else "❌ 取消失败。")
+                else:
+                    print(f"✅ Canceled alarm #{a['id']} ({a['time_iso']})." if ok else "❌ Cancel failed.")
                 continue
 
             if it == "UPDATE_ALARM":
@@ -636,18 +829,25 @@ def main():
                     print(f"❌ Couldn't parse new time: {to}")
                     continue
                 ok = core.update_alarm(a["id"], new_dt)
-                msg = llm_say("confirm", {"result": "updated", "alarm_id": a["id"], "old": a["time_iso"], "new": iso(new_dt)})
-                print(f"✅ Updated alarm #{a['id']} -> {iso(new_dt)}. {msg}" if ok else "❌ Update failed.")
+                human = new_dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+                if last_lang == "zh":
+                    print(f"✅ 已更新闹钟 #{a['id']} → {human}。" if ok else "❌ 更新失败。")
+                else:
+                    print(f"✅ Updated alarm #{a['id']} -> {human}." if ok else "❌ Update failed.")
                 continue
 
             if it == "STOP_ALARM":
+                with core.lock:
+                    if core.active:
+                        core.active.lang = last_lang
                 core.try_stop_alarm()
                 continue
 
-            # fallback chat
-            text = intent.get("text", s)
-            reply = llm_say("confirm", {"result": "chat", "text": text})
-            print(reply)
+            # fallback chat: deterministic (no LLM here in MVP)
+            if last_lang == "zh":
+                print("我可以帮你设置/取消/修改闹钟。输入 /help 查看用法。")
+            else:
+                print("I can set/cancel/update alarms. Type /help.")
 
     except KeyboardInterrupt:
         pass
