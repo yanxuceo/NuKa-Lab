@@ -347,6 +347,7 @@ def llm_intent(user_text: str) -> dict:
         "Allowed intents:\n"
         "CREATE_ALARM: set a new alarm\n"
         "CANCEL_ALARM: cancel an existing alarm\n"
+        "CANCEL_ALL_ALARMS: cancel/disable ALL enabled alarms\n"
         "UPDATE_ALARM: change an existing alarm time\n"
         "LIST_ALARMS: list alarms\n"
         "STOP_ALARM: user tries to stop the currently ringing alarm\n"
@@ -356,6 +357,7 @@ def llm_intent(user_text: str) -> dict:
         "JSON schemas:\n"
         "CREATE_ALARM: {\"intent\":\"CREATE_ALARM\",\"time_text\":\"...\",\"target_reps\":10,\"label\":\"optional\"}\n"
         "CANCEL_ALARM: {\"intent\":\"CANCEL_ALARM\",\"which\":\"...\"}\n"
+        "CANCEL_ALL_ALARMS: {\"intent\":\"CANCEL_ALL_ALARMS\"}\n"
         "UPDATE_ALARM: {\"intent\":\"UPDATE_ALARM\",\"from\":\"...\",\"to\":\"...\"}\n"
         "LIST_ALARMS: {\"intent\":\"LIST_ALARMS\"}\n"
         "STOP_ALARM: {\"intent\":\"STOP_ALARM\"}\n"
@@ -528,6 +530,21 @@ class NukaCore:
             cur.execute("UPDATE alarms SET enabled=0, updated_at=? WHERE id=?", (iso(now_local()), alarm_id))
             self.conn.commit()
             return cur.rowcount > 0
+        
+    def cancel_all_alarms(self, only_enabled: bool = True) -> int:
+        """
+        Disable all alarms in one shot.
+        Returns number of rows affected.
+        """
+        with self.lock:
+            cur = self.conn.cursor()
+            if only_enabled:
+                cur.execute("UPDATE alarms SET enabled=0, updated_at=? WHERE enabled=1", (iso(now_local()),))
+            else:
+                cur.execute("UPDATE alarms SET enabled=0, updated_at=?", (iso(now_local()),))
+            self.conn.commit()
+            return cur.rowcount
+
 
     def update_alarm(self, alarm_id: int, new_time: datetime) -> bool:
         with self.lock:
@@ -897,6 +914,14 @@ def main():
                         core.active.lang = last_lang
                 core.try_stop_alarm()
                 continue
+            
+
+            s2 = s.strip().lower()
+            if s2 in ("关闭所有闹钟", "关闭全部闹钟", "取消所有闹钟", "cancel all alarms", "disable all alarms", "turn off all alarms"):
+                n = core.cancel_all_alarms(only_enabled=True)
+                print(f"✅ 已关闭所有闹钟（共 {n} 个）。" if last_lang == "zh" else f"✅ Disabled all alarms ({n}).")
+                continue
+            
 
             intent = llm_intent(s)
             it = intent.get("intent", "CHAT")
@@ -942,6 +967,15 @@ def main():
                 else:
                     print(f"✅ Canceled alarm #{a['id']} ({a['time_iso']})." if ok else "❌ Cancel failed.")
                 continue
+
+            if it == "CANCEL_ALL_ALARMS":
+                n = core.cancel_all_alarms(only_enabled=True)
+                if last_lang == "zh":
+                    print(f"✅ 已关闭所有闹钟（共 {n} 个）。")
+                else:
+                    print(f"✅ Disabled all alarms ({n}).")
+                continue
+
 
             if it == "UPDATE_ALARM":
                 frm = intent.get("from", "")
