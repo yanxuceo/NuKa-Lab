@@ -777,17 +777,74 @@ def start_http_api(core, host="127.0.0.1", port=8008):
 # CLI
 # -------------------------
 HELP_TEXT = """
+Nuka Squat Alarm — Help
+
+You can control alarms using natural language (Chinese or English).
+
+────────────────────────
+1) Create an alarm
+────────────────────────
+Examples:
+  - 帮我订一个明早七点的闹钟
+  - 帮我订一个10分钟以后的闹钟
+  - set an alarm tomorrow 7am
+  - set an alarm at tomorrow 13:00
+  - set an alarm in 2 minutes
+
+Notes:
+  - Relative time (e.g. "10 minutes later") is supported
+  - Morning phrases like “明早 / tomorrow morning” are handled safely
+
+────────────────────────
+2) List alarms
+────────────────────────
+Examples:
+  - list alarms
+  - 列出闹钟
+  - 我现在有哪些闹钟
+
+Tip:
+  - Each alarm has an ID (recommended for later operations)
+
+────────────────────────
+3) Cancel an alarm
+────────────────────────
+Best practice (recommended):
+  - cancel alarm 3
+  - 取消闹钟 3
+
+Also supported (less precise):
+  - cancel tomorrow morning alarm
+  - 把明天早上的闹钟取消
+
+────────────────────────
+4) Update (change) an alarm
+────────────────────────
+Examples:
+  - 把闹钟 3 改到明天 8 点
+  - 把明早六点的闹钟改成八点
+  - change alarm 3 to tomorrow 13:30
+  - change tomorrow 6 to 8
+
+────────────────────────
+5) When alarm is ringing (squat mode)
+────────────────────────
 Commands:
-  - natural language:
-      "set an alarm tomorrow 7am"
-      "cancel tomorrow morning alarm"
-      "change tomorrow 6 to 8"
-      "list alarms"
-  - special:
-      rep      -> report one squat rep (for MVP)
-      stop     -> try stop current alarm (only after reps complete)
-      exit     -> quit
+  - rep     → record ONE squat (camera / MoveNet can call this automatically)
+  - stop    → stop alarm (ONLY after all required squats are done)
+
+Rules:
+  - Alarm cannot be stopped until target squats are completed
+  - Each squat triggers a short “ding” sound
+  - Alarm fully stops only after all squats are finished
+
+────────────────────────
+6) Exit
+────────────────────────
+  - exit
+  - quit
 """
+
 
 def render_alarms(alarms: list[dict]):
     if not alarms:
