@@ -3,6 +3,11 @@ import cv2
 import numpy as np
 from tflite_runtime.interpreter import Interpreter
 
+import requests
+NUKA_REP_URL = "http://127.0.0.1:8008/rep"
+
+
+
 MODEL_PATH = "movenet_lightning_int8.tflite"
 CAM_INDEX = 0
 IN_SIZE = 192
@@ -281,6 +286,12 @@ def main():
                     print("⬇️ DOWN")
                 elif event == "SQUAT_DONE":
                     print("✅ SQUAT_DONE | cnt=", cnt)
+                    
+                    # Send rep to Nuka (short timeout to avoid blocking camera loop)
+                    try:
+                        requests.post(NUKA_REP_URL, timeout=0.8)
+                    except Exception:
+                        pass
 
             # draw ROI rect
             if last_roi is not None:

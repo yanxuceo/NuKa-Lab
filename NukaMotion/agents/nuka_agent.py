@@ -15,6 +15,11 @@ import dateparser
 from dateparser.conf import SettingValidationError
 import requests
 
+
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+
 TZ_NAME = "Europe/Berlin"
 TZ = ZoneInfo(TZ_NAME)
 
@@ -708,6 +713,66 @@ class NukaCore:
             pass
 
 
+def start_http_api(core, host="127.0.0.1", port=8008):
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, code=200, body="OK", content_type="text/plain; charset=utf-8"):
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", content_type)
+                self.end_headers()
+                try:
+                    self.wfile.write(body.encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            except Exception:
+                # don’t crash handler thread for any response errors
+                pass
+
+
+        def do_GET(self):
+            p = urlparse(self.path).path
+            if p != "/status":
+                return self._send(404, "Not Found")
+
+            with core.lock:
+                a = core.active
+                if not a:
+                    payload = {"active": False}
+                else:
+                    payload = {
+                        "active": True,
+                        "state": a.state,
+                        "current_reps": a.current_reps,
+                        "target_reps": a.target_reps,
+                        "alarm_id": a.alarm_id,
+                        "session_id": a.session_id,
+                    }
+            self._send(200, json.dumps(payload), "application/json; charset=utf-8")
+
+        def do_POST(self):
+            p = urlparse(self.path).path
+
+            if p == "/rep":
+                # triggers one rep if a squat session is active
+                core.report_rep()
+                return self._send(200, "REP_OK")
+
+            if p == "/stop":
+                core.try_stop_alarm()
+                return self._send(200, "STOP_OK")
+
+            return self._send(404, "Not Found")
+
+        def log_message(self, format, *args):
+            # silence default request logs (optional)
+            return
+
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    return httpd
+
+
 # -------------------------
 # CLI
 # -------------------------
@@ -739,6 +804,10 @@ def main():
     db_init()
     core = NukaCore()
     core.start()
+
+    # NEW: start local HTTP API for MoveNet integration
+    httpd = start_http_api(core, host="127.0.0.1", port=8008)
+    print("HTTP API: POST http://127.0.0.1:8008/rep  |  GET http://127.0.0.1:8008/status")
 
     print("Nuka MVP is running. Type /help for help.")
     last_lang = "en"
@@ -851,9 +920,15 @@ def main():
 
     except KeyboardInterrupt:
         pass
+  
     finally:
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
         core.shutdown()
         print("Bye.")
+
 
 
 if __name__ == "__main__":
