@@ -15,12 +15,8 @@ No buttons. No cheating. Just move.**
 Instead of tapping a button half-asleep, you must **prove that you are awake** —
 with your body.
 
-The system combines:
-
-- **Motion intelligence** (real-time pose & squat detection)
-- **Agent intelligence** (LLM-powered alarm control & interaction)
-
-to create a wake-up experience that is both **physically enforced** and **cognitively aware**.
+The system uses **real-time human pose estimation** to detect squats and
+only disables the alarm after valid movements are completed.
 
 ---
 
@@ -36,24 +32,6 @@ By enforcing motion as a wake-up condition, NukaMotion:
 - Prevents unconscious snoozing
 - Forces blood flow and muscle activation
 - Creates a short but effective *wake-up ritual*
-- Eliminates “cheating” via half-awake button presses
-
----
-
-## 🧩 What Makes It Different?
-
-NukaMotion is **not just a vision demo**.
-
-It is a **motion-gated intelligent agent system**:
-
-| Layer | Responsibility |
-|-----|----------------|
-| **Motion Layer** | Detects real squats using pose estimation |
-| **Agent Layer** | Manages alarms, rules, states, and user intent |
-| **Language Layer** | Understands natural language commands via LLM |
-
-Motion unlocks the alarm.  
-Language controls the system.
 
 ---
 
@@ -67,65 +45,29 @@ NukaMotion supports a debug/demo mode with:
 
 Designed to be **demo-friendly** and **presentation-ready**.
 
+![NukaMotion demo](NukaMotion_demo.gif)
+
 ---
 
 ## 🏗 System Overview
 
-### Hardware
-- NVIDIA Jetson (Nano / Orin, CPU-first, GPU planned)
+**Hardware**
+- NVIDIA Jetson (CPU-first, GPU planned)
 - USB camera (side-view recommended)
-- Speaker (USB / I2S planned for alarm & feedback)
 
-### Software
+**Software**
 - MoveNet (SinglePose, Lightning)
-- TFLite Runtime (CPU inference)
+- TFLite Runtime (CPU)
 - OpenCV + GStreamer
-- Python-based squat state machine
-- SQLite (alarm & session persistence)
-- Ollama + Qwen LLM (agent intelligence)
+- Python-based motion logic & state machine
 
----
-
-## 🧠 Agent Architecture (Nuka Agent)
-
-NukaMotion includes a local AI agent (**Nuka Agent**) powered by **Qwen LLM** via **Ollama**.
-
-### What the Agent Does
-
-The agent is responsible for:
-
-- Understanding **natural language commands**
-- Managing **alarm lifecycle**
-- Enforcing **motion-based unlock rules**
-- Coordinating with the motion system via HTTP
-
-### Example Interactions
-
+**Core pipeline**
 ```
-Set an alarm tomorrow morning at seven
-Cancel my morning alarm
-Change tomorrow 6 to 8
-List all alarms
-Close all alarms
-```
-
----
-
-## 🔄 Motion ↔ Agent Integration
-
-The system is intentionally **decoupled**:
-
-### MoveNet Motion Process
-- Runs continuous pose estimation
-- Detects valid squat events
-- On each valid squat:
-  POST http://127.0.0.1:8008/rep
-
-### Nuka Agent HTTP API
-```
-POST /rep     → count one squat
-POST /stop    → attempt to stop alarm
-GET  /status  → query active session
+Camera
+  → Pose Estimation
+    → Knee Angle Analysis
+      → Squat State Machine
+        → Alarm Unlock
 ```
 
 ---
@@ -134,53 +76,52 @@ GET  /status  → query active session
 
 - Side-view human pose is tracked using MoveNet
 - Knee joint angle is calculated from hip–knee–ankle keypoints
-- State machine detects STAND → DOWN → STAND
+- A state machine detects:
+  - `STAND → DOWN → STAND`
 - Each valid cycle counts as **one squat**
-- Alarm unlocks only after **N valid squats**
+- The alarm unlocks after **N squats**
 
----
-
-## 🔔 Alarm Logic (No Cheating)
-
-- Alarm rings continuously until motion begins
-- During squats: alarm pauses, short ding per rep
-- If user stops moving too long: alarm resumes
-- Only after completing all reps: alarm can be stopped
+To improve robustness:
+- ROI tracking stabilizes pose detection
+- Automatic fallback to full-frame detection handles tracking loss
+- Temporal smoothing reduces jitter
 
 ---
 
 ## ⚠️ Current Limitations
 
 - Single-person only
-- Side-view works best
+- Side-view works best (by design)
 - CPU inference (~10–13 FPS)
-- No speech I/O yet
-- Experimental prototype
+- Experimental prototype, not a consumer product
 
 ---
 
 ## 🔮 Future Work
 
-- TensorRT acceleration
-- Audio & voice integration
-- Speech-to-text / text-to-speech
-- More motion types
-- Embedded deployment
+- GPU acceleration with TensorRT
+- Multi-pose support
+- Audio alarm integration
+- Configurable motion types (jump, plank, etc.)
+- Embedded / edge deployment
 
 ---
 
 ## 🧪 Project Status
 
-Part of **Nuka Lab** — focused on:
+This project is part of **Nuka Lab** — a personal experimental lab focused on:
+
 - Human–machine interaction
-- Edge AI
-- LLM + physical world integration
+- Edge AI & perception
+- Behavior-driven system design
+
+NukaMotion is an **exploration**, not a finished product.
 
 ---
 
 ## 🧾 License
 
-MIT License
+MIT License (or project-specific license)
 
 ---
 
