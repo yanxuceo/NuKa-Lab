@@ -37,6 +37,14 @@ By enforcing motion as a wake-up condition, NukaMotion:
 
 ## 🎥 Demo
 
+NukaMotion supports a debug/demo mode with:
+- Real-time skeleton overlay
+- Knee angle visualization
+- Squat count and state
+- Optional recorded output video (`debug_out.mp4`)
+
+Designed to be **demo-friendly** and **presentation-ready**.
+
 ![NukaMotion demo](NukaMotion_demo.gif)
 
 ---
@@ -77,18 +85,6 @@ To improve robustness:
 - ROI tracking stabilizes pose detection
 - Automatic fallback to full-frame detection handles tracking loss
 - Temporal smoothing reduces jitter
-
----
-
-## 🎥 Demo Mode
-
-NukaMotion supports a debug/demo mode with:
-- Real-time skeleton overlay
-- Knee angle visualization
-- Squat count and state
-- Optional recorded output video (`debug_out.mp4`)
-
-Designed to be **demo-friendly** and **presentation-ready**.
 
 ---
 
