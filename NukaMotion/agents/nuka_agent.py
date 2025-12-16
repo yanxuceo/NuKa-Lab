@@ -438,6 +438,7 @@ class ActiveSession:
     target_reps: int
     started_at: datetime
     lang: str = "en"
+    done_at: datetime | None = None   # NEW
 
 
 class NukaCore:
@@ -637,10 +638,16 @@ class NukaCore:
         if cur_reps >= target:
             with self.lock:
                 if self.active:
-                    self.active.state = "UNLOCKED"
+                    self.active.state = "DONE"
+
+                    self.active.done_at = now_local()
+
                     cur = self.conn.cursor()
-                    cur.execute("UPDATE sessions SET state=? WHERE id=?", ("UNLOCKED", self.active.session_id))
+                    cur.execute("UPDATE sessions SET state=? WHERE id=?", ("DONE", self.active.session_id))
                     self.conn.commit()
+
+            # （可选）这里以后接 speaker：stop ringing
+            # stop_ringtone()
 
             # ONE LLM call only here
             msg = llm_say("encourage", {
@@ -651,7 +658,10 @@ class NukaCore:
                 "lang": lang
             })
             print(f"✅ {cur_reps}/{target} {msg}")
-            print("👉 You can now type 'stop' to stop the alarm.\n")
+            
+            # NEW: 2 秒后自动结束 session（active=false）
+            self._auto_finish_session_after_done(delay_sec=2.0)
+            return
 
 
     def try_stop_alarm(self):
@@ -685,6 +695,26 @@ class NukaCore:
             print(f"🛑 闹钟已关闭。太棒了！你完成了 {target} 个深蹲！\n")
         else:
             print(f"🛑 Alarm stopped. Nice work — {target} squats done!\n")
+
+
+    def _auto_finish_session_after_done(self, delay_sec: float = 2.0):
+        def _finish():
+            with self.lock:
+                if not self.active:
+                    return
+                if self.active.state != "DONE":
+                    return
+                sid = self.active.session_id
+                cur = self.conn.cursor()
+                cur.execute("UPDATE sessions SET state=?, ended_at=? WHERE id=?",
+                            ("DONE", iso(now_local()), sid))
+                self.conn.commit()
+                self.active = None
+
+        t = threading.Timer(delay_sec, _finish)
+        t.daemon = True
+        t.start()
+
 
     # ---- scheduler loop ----
     def _scheduler_loop(self):
@@ -921,7 +951,7 @@ def main():
                 n = core.cancel_all_alarms(only_enabled=True)
                 print(f"✅ 已关闭所有闹钟（共 {n} 个）。" if last_lang == "zh" else f"✅ Disabled all alarms ({n}).")
                 continue
-            
+
 
             intent = llm_intent(s)
             it = intent.get("intent", "CHAT")
