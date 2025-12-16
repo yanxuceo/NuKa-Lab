@@ -8,7 +8,7 @@ NUKA_REP_URL = "http://127.0.0.1:8008/rep"
 
 
 
-MODEL_PATH = "movenet_lightning_int8.tflite"
+MODEL_PATH = "../models/movenet_lightning_int8.tflite"
 CAM_INDEX = 0
 IN_SIZE = 192
 
