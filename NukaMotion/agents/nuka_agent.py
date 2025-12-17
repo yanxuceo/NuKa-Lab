@@ -634,6 +634,16 @@ class NukaCore:
         # per-rep feedback: only beep (fast)
         print("🔔 ding")
 
+        with self.lock:
+            if not self.active or self.active.state not in ("SQUAT_ACTIVE", "UNLOCKED"):
+                print("No active squat session. (Wait for alarm or create one.)")
+                return
+
+            # ✅ DONE LOCK: once DONE, ignore any further reps
+            if self.active.state == "DONE":
+                return
+
+
         # when done, unlock + speak ONE sentence (LLM once)
         if cur_reps >= target:
             with self.lock:
