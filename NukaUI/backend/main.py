@@ -1,10 +1,13 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 import requests
 
 AGENT_BASE = "http://127.0.0.1:8008"
+MOTION_MJPEG = "http://127.0.0.1:8010/mjpeg"
+
 
 app = FastAPI()
 
@@ -75,3 +78,37 @@ async def broadcast_loop():
                     dead.append(ws)
             for d in dead:
                 clients.discard(d)
+
+
+@app.get("/mjpeg")
+def mjpeg():
+    """
+    Proxy MJPEG stream from nukamotion (8010) to UI.
+    """
+    try:
+        r = requests.get(
+            MOTION_MJPEG,
+            stream=True,
+            timeout=(3.0, 3600.0),
+        )
+        r.raise_for_status()
+    except Exception as e:
+        return {"error": "motion_stream_unavailable", "detail": str(e)}
+
+    def gen():
+        try:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
+
+    return StreamingResponse(
+        gen(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
