@@ -57,20 +57,42 @@ class SoundController:
         self._fade_thread: Optional[threading.Thread] = None
 
     # -------------------- internal helpers --------------------
-    def _run_aplay(self, wav_path: Path):
-        if not wav_path.exists():
-            raise FileNotFoundError(wav_path)
-        cmd = [
-            "aplay",
-            "-q",
-            "-D",
-            self.cfg.device,
-            str(wav_path),
-        ]
+    def _resolve_audio_path(self, audio_path: Path) -> Path:
+        if audio_path.exists():
+            return audio_path
+        # allow common alt extensions (e.g., wav vs mp3)
+        candidates = []
+        if audio_path.suffix:
+            base = audio_path.with_suffix("")
+            candidates.append(base.with_suffix(".wav"))
+            candidates.append(base.with_suffix(".WAV"))
+            candidates.append(base.with_suffix(".mp3"))
+            candidates.append(base.with_suffix(".MP3"))
+        else:
+            candidates.extend([audio_path.with_suffix(ext) for ext in (".wav", ".WAV", ".mp3", ".MP3")])
+        for cand in candidates:
+            if cand.exists():
+                return cand
+        raise FileNotFoundError(audio_path)
+
+    def _run_playback(self, audio_path: Path):
+        real_path = self._resolve_audio_path(audio_path)
+        cmd = self._build_play_cmd(real_path)
         try:
             subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError:
             pass
+
+    def _build_play_cmd(self, audio_path: Path) -> list[str]:
+        ext = audio_path.suffix.lower()
+        return [
+            "ffplay",
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "quiet",
+            str(audio_path),
+        ]
 
     def _set_hw_volume(self, level: float):
         card = self.cfg.mixer_card
@@ -125,7 +147,7 @@ class SoundController:
 
         def loop():
             while not self._alarm_stop.is_set():
-                self._run_aplay(self.cfg.alarm_path)
+                self._run_playback(self.cfg.alarm_path)
 
         self._alarm_thread = threading.Thread(target=loop, daemon=True)
         self._alarm_thread.start()
@@ -139,7 +161,7 @@ class SoundController:
 
     def play_ding(self):
         threading.Thread(
-            target=self._run_aplay,
+            target=self._run_playback,
             args=(self.cfg.ding_path,),
             daemon=True,
         ).start()
