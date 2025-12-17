@@ -75,12 +75,28 @@ class SoundController:
                 return cand
         raise FileNotFoundError(audio_path)
 
-    def _run_playback(self, audio_path: Path):
+    def _play_audio(self, audio_path: Path, stop_event: threading.Event | None = None):
         real_path = self._resolve_audio_path(audio_path)
         cmd = self._build_play_cmd(real_path)
         try:
-            subprocess.run(cmd, check=True)
-        except subprocess.CalledProcessError:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if stop_event is None:
+                proc.wait()
+                return
+            while proc.poll() is None:
+                if stop_event.is_set():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    break
+                time.sleep(0.05)
+        except Exception:
             pass
 
     def _build_play_cmd(self, audio_path: Path) -> list[str]:
@@ -147,7 +163,7 @@ class SoundController:
 
         def loop():
             while not self._alarm_stop.is_set():
-                self._run_playback(self.cfg.alarm_path)
+                self._play_audio(self.cfg.alarm_path, stop_event=self._alarm_stop)
 
         self._alarm_thread = threading.Thread(target=loop, daemon=True)
         self._alarm_thread.start()
@@ -161,8 +177,8 @@ class SoundController:
 
     def play_ding(self):
         threading.Thread(
-            target=self._run_playback,
-            args=(self.cfg.ding_path,),
+            target=self._play_audio,
+            args=(self.cfg.ding_path, None),
             daemon=True,
         ).start()
 
