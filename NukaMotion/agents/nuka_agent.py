@@ -18,7 +18,31 @@ import requests
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+from pathlib import Path
+import sys
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+try:
+    from NukaMotion.audio.sound_player import SoundController, SoundConfig
+except Exception:
+    class SoundController:  # fallback no-op
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start_alarm(self):
+            pass
+
+        def stop_alarm(self):
+            pass
+
+        def play_ding(self):
+            pass
+
+        def fade_alarm_to(self, *_, **__):
+            pass
 
 TZ_NAME = "Europe/Berlin"
 TZ = ZoneInfo(TZ_NAME)
@@ -449,6 +473,14 @@ class NukaCore:
         self.default_lang = "en"
         self.active: ActiveSession | None = None
         self.scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
+        try:
+            self.sound = SoundController(SoundConfig())
+        except Exception:
+            self.sound = SoundController()
+        self.last_rep_ts = None
+        self.alarm_stopped = False
+        self.alarm_volume_thread = threading.Thread(target=self._alarm_volume_guard, daemon=True)
+        self.alarm_volume_thread.start()
 
     # ---- Alarm CRUD ----
     def create_alarm(self, time_dt: datetime, target_reps: int = 10, label: str | None = None) -> int:
@@ -590,6 +622,11 @@ class NukaCore:
         })
         print(f"\n⏰ ALARM! {msg}")
         print(f"👉 Start squats now. Type 'rep' for each squat. Target: {alarm['target_reps']}\n")
+        try:
+            self.sound.start_alarm()
+        except Exception:
+            pass
+        self.alarm_stopped = False
 
         with self.lock:
             if self.active:
@@ -631,8 +668,17 @@ class NukaCore:
             cur.execute("UPDATE sessions SET current_reps=? WHERE id=?", (cur_reps, self.active.session_id))
             self.conn.commit()
 
-        # per-rep feedback: only beep (fast)
+        # per-rep feedback: ding + alarm gating
         print("🔔 ding")
+        try:
+            self.sound.play_ding()
+            now = time.time()
+            if self.last_rep_ts is None:
+                self.sound.stop_alarm()
+                self.alarm_stopped = True
+            self.last_rep_ts = now
+        except Exception:
+            pass
 
         with self.lock:
             if not self.active or self.active.state not in ("SQUAT_ACTIVE", "UNLOCKED"):
@@ -668,6 +714,12 @@ class NukaCore:
                 "lang": lang
             })
             print(f"✅ {cur_reps}/{target} {msg}")
+            try:
+                self.sound.stop_alarm()
+            except Exception:
+                pass
+            self.last_rep_ts = None
+            self.alarm_stopped = False
             
             # NEW: 2 秒后自动结束 session（active=false）
             self._auto_finish_session_after_done(delay_sec=2.0)
@@ -757,6 +809,21 @@ class NukaCore:
             due.sort(key=lambda x: x[0])
             return due[0][1]
         return None
+    
+    def _alarm_volume_guard(self):
+        while not self.stop_flag.is_set():
+            time.sleep(0.5)
+            ts = self.last_rep_ts
+            if ts is None:
+                continue
+            if (time.time() - ts) > 3.0:
+                try:
+                    if self.alarm_stopped:
+                        self.sound.start_alarm()
+                        self.alarm_stopped = False
+                except Exception:
+                    pass
+                self.last_rep_ts = None
 
     def start(self):
         self.scheduler_thread.start()
