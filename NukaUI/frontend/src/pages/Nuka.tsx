@@ -1,12 +1,16 @@
 import { useMemo } from "react";
 import type { NukaState } from "../state/nuka";
 
+const MJPEG_URL = "http://localhost:8000/mjpeg";
+
 export default function Nuka({
   state,
   fullscreen = false,
+  celebrationMode = false,
 }: {
   state: NukaState;
   fullscreen?: boolean;
+  celebrationMode?: boolean;
 }) {
   const done =
     state.state === "DONE" || state.current_reps >= (state.target_reps || 10);
@@ -16,140 +20,420 @@ export default function Nuka({
     return Math.max(0, Math.min(100, (state.current_reps / t) * 100));
   }, [state.current_reps, state.target_reps]);
 
-  const title = done
-    ? "✅ Completed"
-    : state.active
-      ? "⏰ Alarm ringing"
-      : "Nuka Motion";
+  const confettiPieces = useMemo(() => {
+    if (!celebrationMode) {
+      return [];
+    }
+    const colors = ["#38bdf8", "#a855f7", "#facc15", "#f97316"];
+    return Array.from({ length: 16 }).map(() => ({
+      left: Math.random() * 100,
+      top: Math.random() * 100,
+      size: 6 + Math.random() * 18,
+      opacity: 0.35 + Math.random() * 0.45,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      rotate: Math.random() * 360,
+    }));
+  }, [celebrationMode]);
 
   return (
-    <div style={fullscreen ? fsWrap() : wrap()}>
-      <div style={header()}>
-        <div style={{ fontSize: fullscreen ? 34 : 24, fontWeight: 900 }}>
-          {title}
-        </div>
-        <div style={{ opacity: 0.7, fontWeight: 700 }}>{Math.round(pct)}%</div>
-      </div>
+    <div style={wrap(fullscreen)}>
+      {/* ===== ACTIVE / IN-PROGRESS ===== */}
+      {!done && (
+        <div style={activeGrid(fullscreen)}>
+          {/* LEFT: Ring / Counter */}
+          <div style={leftPanel()}>
+            <div style={title()}>Squats</div>
 
-      <div style={fullscreen ? fsGrid() : grid()}>
-        <div style={panel(fullscreen)}>
-          <div style={{ opacity: 0.8, fontWeight: 700 }}>
-            {done ? "Pump up" : "Squats"}
+            <div style={counter()}>
+              <span style={countNum(fullscreen)}>{state.current_reps}</span>
+              <span style={countSep()}>/</span>
+              <span style={countTotal()}>{state.target_reps}</span>
+            </div>
+
+            <Ring value={pct} size={fullscreen ? 220 : 180} />
+
+            <div style={hint()}>Do squats in front of the camera</div>
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              gap: 10,
-              marginTop: 10,
-            }}
-          >
-            <div
-              style={{
-                fontSize: fullscreen ? 74 : 52,
-                fontWeight: 950,
-                lineHeight: 1,
-              }}
-            >
-              {state.current_reps}
-            </div>
-            <div
-              style={{
-                opacity: 0.55,
-                fontSize: fullscreen ? 28 : 22,
-                fontWeight: 800,
-              }}
-            >
-              / {state.target_reps}
-            </div>
-          </div>
-
-          <div
-            style={{
-              marginTop: fullscreen ? 18 : 14,
-              display: "flex",
-              justifyContent: "center",
-            }}
-          >
-            {done ? (
-              <CelebrateRing
-                value={pct}
-                size={fullscreen ? 240 : 180}
-                label="PUMPED"
-              />
-            ) : (
-              <Ring value={pct} size={fullscreen ? 220 : 160} />
-            )}
-          </div>
-
-          {state.active && !done && (
-            <div
-              style={{
-                marginTop: 14,
-                opacity: 0.75,
-                fontSize: fullscreen ? 16 : 14,
-              }}
-            >
-              Do squats to unlock completion.
-            </div>
-          )}
-
-          {done && (
-            <div
-              style={{
-                marginTop: 14,
-                display: "grid",
-                gap: 8,
-              }}
-            >
-              <div
-                style={{
-                  fontWeight: 900,
-                  fontSize: fullscreen ? 20 : 18,
-                }}
-              >
-                Nice work!
+          {/* RIGHT: Video as background */}
+          <div style={videoPanel(fullscreen)}>
+            <div style={videoWrap()}>
+              <div style={videoFrame(fullscreen)}>
+                <img src={`${MJPEG_URL}?cache=1`} style={video()} />
+                {/* subtle HUD overlay */}
+                <div style={videoMask()} />
+                <div style={videoBadge()}>Live camera</div>
               </div>
-              <div style={{ opacity: 0.75, fontSize: fullscreen ? 16 : 14 }}>
-                Breathing… heart rate up… returning to Home.
+              <div style={videoMetaRow()}>
+                <VideoMeta label="Perspective" value="Side view" />
+                <VideoMeta label="Tracking" value="ROI auto" />
+                <VideoMeta label="FPS" value="~20" />
               </div>
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* ===== DONE / CELEBRATION ===== */}
+      {done && (
+        <div style={doneWrap(celebrationMode)}>
+          {celebrationMode && <Confetti pieces={confettiPieces} />}
+          <div style={badgeRow()}>
+            <span style={badgePill("rgba(56,189,248,0.8)")}>ALARM CLEARED</span>
+            <span style={badgePill("rgba(168,85,247,0.8)")}>SQUAT POWER</span>
+          </div>
+
+          <CelebrateRing
+            value={pct}
+            size={fullscreen ? 260 : 220}
+            label="PUMPED"
+          />
+
+          <div style={doneText(fullscreen)}>Mission accomplished</div>
+          <div style={doneSub()}>
+            Breathing steady. Nervous system awake.
+          </div>
+
+          <div style={metricsRow()}>
+            <Metric label="Reps" value={`${state.current_reps}`} />
+            <Metric label="Target" value={`${state.target_reps}`} />
+            <Metric label="Mood" value="AWAKE" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function wrap(): React.CSSProperties {
-  return { padding: 18, display: "grid", gap: 14 };
+/* =========================
+   Layout styles
+========================= */
+
+function wrap(fullscreen: boolean): React.CSSProperties {
+  return {
+    height: "100%",
+    width: "100%",
+    padding: fullscreen ? 18 : 14,
+    boxSizing: "border-box",
+  };
 }
-function fsWrap(): React.CSSProperties {
-  return { padding: 22, height: "100%", display: "grid", gap: 18 };
+
+function activeGrid(fullscreen: boolean): React.CSSProperties {
+  return {
+    height: "100%",
+    display: "grid",
+    gridTemplateColumns: fullscreen ? "420px 1fr" : "360px 1fr",
+    gap: 18,
+  };
 }
-function header(): React.CSSProperties {
+
+function leftPanel(): React.CSSProperties {
+  return {
+    borderRadius: 22,
+    padding: 18,
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid rgba(255,255,255,0.10)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 18,
+    alignItems: "center",
+    textAlign: "center",
+    justifyContent: "center",
+  };
+}
+
+function videoPanel(fullscreen: boolean): React.CSSProperties {
+  return {
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: fullscreen ? 18 : 14,
+    borderRadius: 22,
+    background:
+      "radial-gradient(circle at 20% 20%, rgba(255,255,255,0.08), transparent 55%), rgba(3,5,8,0.92)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    minHeight: "100%",
+  };
+}
+
+function videoWrap(): React.CSSProperties {
   return {
     display: "flex",
-    justifyContent: "space-between",
-    alignItems: "baseline",
+    flexDirection: "column",
+    gap: 16,
+    width: "100%",
+    alignItems: "center",
   };
 }
-function grid(): React.CSSProperties {
-  return { display: "grid", gap: 14 };
-}
-function fsGrid(): React.CSSProperties {
-  return { display: "grid", gap: 16, gridTemplateColumns: "1fr" };
-}
-function panel(fullscreen: boolean): React.CSSProperties {
+
+function videoFrame(fullscreen: boolean): React.CSSProperties {
   return {
+    position: "relative",
+    width: "100%",
+    maxWidth: fullscreen ? 1280 : 920,
+    aspectRatio: fullscreen ? "16 / 10" : "16 / 10",
+    borderRadius: 24,
+    overflow: "hidden",
+    boxShadow: "0 25px 45px rgba(0,0,0,0.45)",
     border: "1px solid rgba(255,255,255,0.10)",
-    background: "rgba(255,255,255,0.04)",
-    borderRadius: 22,
-    padding: fullscreen ? 18 : 14,
-    boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+    background: "#000",
   };
 }
+
+function video(): React.CSSProperties {
+  return {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block",
+  };
+}
+
+function videoMask(): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    background:
+      "linear-gradient(120deg, rgba(11,15,20,0.65) 0%, rgba(11,15,20,0.10) 40%, rgba(11,15,20,0.00) 100%)",
+    pointerEvents: "none",
+  };
+}
+
+function videoBadge(): React.CSSProperties {
+  return {
+    position: "absolute",
+    left: 14,
+    top: 12,
+    padding: "4px 12px",
+    borderRadius: 999,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    fontWeight: 700,
+    background: "rgba(56,189,248,0.85)",
+    color: "#02131f",
+  };
+}
+
+function videoMetaRow(): React.CSSProperties {
+  return {
+    display: "flex",
+    gap: 14,
+    flexWrap: "wrap",
+    justifyContent: "center",
+  };
+}
+
+function videoMetaCard(): React.CSSProperties {
+  return {
+    minWidth: 130,
+    padding: "10px 12px",
+    borderRadius: 16,
+    background: "rgba(0,0,0,0.35)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    textAlign: "center",
+  };
+}
+
+function VideoMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={videoMetaCard()}>
+      <div style={{ fontSize: 11, opacity: 0.65, letterSpacing: 0.8, fontWeight: 700 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
+    </div>
+  );
+}
+
+/* =========================
+   Text & counters
+========================= */
+
+function title(): React.CSSProperties {
+  return {
+    fontSize: 20,
+    fontWeight: 900,
+    opacity: 0.85,
+  };
+}
+
+function counter(): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 6,
+    justifyContent: "center",
+  };
+}
+
+function countNum(full: boolean): React.CSSProperties {
+  return {
+    fontSize: full ? 64 : 56,
+    fontWeight: 950,
+    lineHeight: 1,
+  };
+}
+
+function countSep(): React.CSSProperties {
+  return {
+    fontSize: 28,
+    opacity: 0.5,
+  };
+}
+
+function countTotal(): React.CSSProperties {
+  return {
+    fontSize: 26,
+    opacity: 0.65,
+    fontWeight: 800,
+  };
+}
+
+function hint(): React.CSSProperties {
+  return {
+    marginTop: 8,
+    fontSize: 14,
+    opacity: 0.65,
+    textAlign: "center",
+  };
+}
+
+/* =========================
+   DONE state
+========================= */
+
+function doneWrap(celebrating: boolean): React.CSSProperties {
+  return {
+    height: "100%",
+    display: "grid",
+    placeItems: "center",
+    alignContent: "center",
+    gap: 18,
+    position: "relative",
+    overflow: "hidden",
+    padding: celebrating ? 28 : 18,
+    borderRadius: celebrating ? 28 : 18,
+    background: celebrating
+      ? "radial-gradient(circle at 20% 20%, rgba(56,189,248,0.45), transparent 60%), radial-gradient(circle at 80% 0%, rgba(168,85,247,0.35), transparent 55%), rgba(10,15,20,0.92)"
+      : "rgba(10,15,20,0.85)",
+    border: "1px solid rgba(255,255,255,0.10)",
+    boxShadow: celebrating ? "0 30px 60px rgba(0,0,0,0.35)" : undefined,
+  };
+}
+
+function doneText(full: boolean): React.CSSProperties {
+  return {
+    fontSize: full ? 28 : 22,
+    fontWeight: 900,
+  };
+}
+
+function doneSub(): React.CSSProperties {
+  return {
+    fontSize: 14,
+    opacity: 0.65,
+    textAlign: "center",
+  };
+}
+
+function badgeRow(): React.CSSProperties {
+  return {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "center",
+  };
+}
+
+function badgePill(color: string): React.CSSProperties {
+  return {
+    borderRadius: 999,
+    padding: "6px 14px",
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 0.8,
+    background: color,
+    color: "#0b0f14",
+  };
+}
+
+function metricsRow(): React.CSSProperties {
+  return {
+    display: "flex",
+    gap: 14,
+    flexWrap: "wrap",
+    justifyContent: "center",
+  };
+}
+
+function metricCard(): React.CSSProperties {
+  return {
+    minWidth: 110,
+    padding: "10px 14px",
+    borderRadius: 18,
+    background: "rgba(255,255,255,0.08)",
+    border: "1px solid rgba(255,255,255,0.10)",
+    textAlign: "center",
+  };
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={metricCard()}>
+      <div style={{ fontSize: 11, opacity: 0.65, letterSpacing: 0.8, fontWeight: 700 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 900 }}>{value}</div>
+    </div>
+  );
+}
+
+type ConfettiPiece = {
+  left: number;
+  top: number;
+  size: number;
+  opacity: number;
+  color: string;
+  rotate: number;
+};
+
+function Confetti({ pieces }: { pieces: ConfettiPiece[] }) {
+  return (
+    <div style={confettiLayer()}>
+      {pieces.map((p, idx) => (
+        <span
+          key={idx}
+          style={{
+            position: "absolute",
+            left: `${p.left}%`,
+            top: `${p.top}%`,
+            width: p.size,
+            height: p.size * 3,
+            background: p.color,
+            opacity: p.opacity,
+            transform: `rotate(${p.rotate}deg)`,
+            borderRadius: 6,
+            filter: "blur(0.2px)",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function confettiLayer(): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
+    overflow: "hidden",
+  };
+}
+
+/* =========================
+   Rings (unchanged logic)
+========================= */
 
 function Ring({ value, size }: { value: number; size: number }) {
   const stroke = Math.max(10, Math.round(size * 0.08));
@@ -159,17 +443,7 @@ function Ring({ value, size }: { value: number; size: number }) {
   const dash = (pct / 100) * c;
 
   return (
-    <svg width={size} height={size} style={{ display: "block" }}>
-      <defs>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="3" result="coloredBlur" />
-          <feMerge>
-            <feMergeNode in="coloredBlur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-
+    <svg width={size} height={size}>
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -182,17 +456,20 @@ function Ring({ value, size }: { value: number; size: number }) {
         cx={size / 2}
         cy={size / 2}
         r={r}
-        stroke="rgba(56,189,248,0.75)"
+        stroke="rgba(56,189,248,0.85)"
         strokeWidth={stroke}
         fill="transparent"
         strokeLinecap="round"
         strokeDasharray={`${dash} ${c - dash}`}
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        filter="url(#glow)"
       />
     </svg>
   );
 }
+
+/* =========================
+   Celebrate ring (原样保留)
+========================= */
 
 function CelebrateRing({
   value,
@@ -209,117 +486,42 @@ function CelebrateRing({
   const pct = Math.max(0, Math.min(100, value));
   const dash = (pct / 100) * c;
 
-  // CSS-only animations (cheap on Jetson)
-  const pulse = {
-    animation: "nukaPulse 1.1s ease-in-out infinite",
-  } as const;
-
-  const breathe = {
-    animation: "nukaBreathe 2.2s ease-in-out infinite",
-  } as const;
-
-  const shimmer = {
-    animation: "nukaShimmer 1.6s linear infinite",
-  } as const;
-
   return (
     <div style={{ position: "relative", width: size, height: size }}>
-      <style>{cssKeyframes()}</style>
-
-      <svg width={size} height={size} style={{ display: "block" }}>
-        <defs>
-          <filter id="glow2">
-            <feGaussianBlur stdDeviation="3.2" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-
-        {/* background track */}
+      <svg width={size} height={size}>
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
-          stroke="rgba(255,255,255,0.10)"
+          stroke="rgba(255,255,255,0.12)"
           strokeWidth={stroke}
           fill="transparent"
         />
-
-        {/* breathing halo */}
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
-          stroke="rgba(56,189,248,0.18)"
-          strokeWidth={stroke * 1.35}
-          fill="transparent"
-          style={breathe}
-        />
-
-        {/* progress ring (kept) */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          stroke="rgba(56,189,248,0.75)"
+          stroke="rgba(56,189,248,0.9)"
           strokeWidth={stroke}
           fill="transparent"
           strokeLinecap="round"
           strokeDasharray={`${dash} ${c - dash}`}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
-          filter="url(#glow2)"
-          style={shimmer}
-        />
-
-        {/* heartbeat dot */}
-        <circle
-          cx={size / 2}
-          cy={size / 2 - r}
-          r={Math.max(4, Math.round(stroke * 0.35))}
-          fill="rgba(56,189,248,0.95)"
-          style={pulse}
         />
       </svg>
 
-      <div style={centerLabel()}>
-        <div style={{ fontWeight: 950, letterSpacing: 1.6 }}>{label}</div>
-        <div style={{ opacity: 0.7, fontSize: 12 }}>Great job</div>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "grid",
+          placeItems: "center",
+          fontWeight: 950,
+          letterSpacing: 1.6,
+        }}
+      >
+        {label}
       </div>
     </div>
   );
-}
-
-function centerLabel(): React.CSSProperties {
-  return {
-    position: "absolute",
-    inset: 0,
-    display: "grid",
-    placeItems: "center",
-    textAlign: "center",
-    pointerEvents: "none",
-  };
-}
-
-function cssKeyframes() {
-  return `
-@keyframes nukaPulse {
-  0%   { transform: scale(1); opacity: 0.85; }
-  45%  { transform: scale(1.55); opacity: 1; }
-  100% { transform: scale(1); opacity: 0.85; }
-}
-
-@keyframes nukaBreathe {
-  0%   { opacity: 0.20; transform: scale(1); }
-  50%  { opacity: 0.55; transform: scale(1.06); }
-  100% { opacity: 0.20; transform: scale(1); }
-}
-
-@keyframes nukaShimmer {
-  0%   { opacity: 0.70; }
-  50%  { opacity: 1.00; }
-  100% { opacity: 0.70; }
-}
-`;
 }

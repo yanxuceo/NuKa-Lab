@@ -1,7 +1,7 @@
 // src/App.tsx
 
-import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useRef} from "react";
+import { BrowserRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 
 
@@ -9,13 +9,64 @@ import Home from "./pages/Home";
 import Devices from "./pages/Devices";
 import Nuka from "./pages/Nuka";
 import { useNukaWS } from "./state/nuka";
+import type { NukaState } from "./state/nuka";
 
 function Shell() {
   const { data, connected } = useNukaWS("ws://localhost:8000/ws");
   const nav = useNavigate();
-  const loc = useLocation();
 
   const prevActiveRef = useRef<boolean>(false);
+  const lastActiveSnapshot = useRef<NukaState | null>(null);
+  const [celebration, setCelebration] = useState<NukaState | null>(null);
+  const celebrateTimerRef = useRef<number | null>(null);
+
+  const stopCelebration = useCallback(
+    (redirect: boolean) => {
+      if (celebrateTimerRef.current) {
+        window.clearTimeout(celebrateTimerRef.current);
+        celebrateTimerRef.current = null;
+      }
+      setCelebration(null);
+      if (redirect) {
+        nav("/");
+      }
+    },
+    [nav]
+  );
+
+  const startCelebration = useCallback(
+    (snapshot: NukaState | null) => {
+      if (!snapshot) return;
+      if (celebrateTimerRef.current) {
+        window.clearTimeout(celebrateTimerRef.current);
+      }
+      setCelebration(snapshot);
+      celebrateTimerRef.current = window.setTimeout(() => {
+        nav("/");
+        // small delay keeps celebration screen during route change
+        window.setTimeout(() => {
+          setCelebration(null);
+          celebrateTimerRef.current = null;
+        }, 40);
+      }, 4500);
+    },
+    [nav]
+  );
+
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    if (data.active) {
+      lastActiveSnapshot.current = data;
+      const doneNow =
+        data.state === "DONE" ||
+        data.current_reps >= (data.target_reps || 10);
+      if (doneNow && !celebration) {
+        startCelebration(data);
+      }
+    }
+  }, [data, celebration, startCelebration]);
 
   useEffect(() => {
     if (!data) return;
@@ -23,20 +74,44 @@ function Shell() {
     const prev = prevActiveRef.current;
     const curr = !!data.active;
 
-    // 只在 false -> true 的瞬间自动跳到 /nuka
+    // false -> true：进入 Nuka
     if (!prev && curr) {
+      stopCelebration(false);
       nav("/nuka");
     }
 
+    // true -> false：完成或回 Home
+    if (prev && !curr) {
+      const snap = lastActiveSnapshot.current;
+      const cleared = snap && snap.current_reps >= (snap.target_reps || 10);
+      if (cleared && snap) {
+        if (!celebration) {
+          startCelebration(snap);
+        }
+      } else {
+        stopCelebration(true);
+      }
+    }
+
     prevActiveRef.current = curr;
-  }, [data?.active, nav]);
+  }, [data, nav, celebration, startCelebration, stopCelebration]);
 
+  useEffect(() => {
+    return () => {
+      if (celebrateTimerRef.current) {
+        window.clearTimeout(celebrateTimerRef.current);
+      }
+    };
+  }, []);
 
-    // Fullscreen alarm mode: hide dock
-  if (data?.active) {
+  const displayState = celebration ?? (data?.active ? data : null);
+  const fullscreenMode = !!displayState;
+
+  // Fullscreen alarm mode: hide dock
+  if (fullscreenMode && displayState) {
     return (
       <div style={fsRoot()}>
-        <Nuka state={data} fullscreen />
+        <Nuka state={displayState} fullscreen celebrationMode={!!celebration} />
         <div style={fsBadge()}>
           WS: {connected ? "online" : "reconnecting…"}
         </div>
@@ -47,10 +122,10 @@ function Shell() {
   return (
     <div style={root()}>
       <aside style={dock()}>
-        <div style={{ fontWeight: 900, letterSpacing: 0.6, marginBottom: 14 }}>NuKa</div>
+        <div style={{ fontWeight: 900, letterSpacing: 0.6, marginBottom: 14 }}>NuKa Lab</div>
 
         <DockItem to="/" label="Home" />
-        <DockItem to="/nuka" label="Nuka" />
+        <DockItem to="/nuka" label="Motion" />
         <DockItem to="/devices" label="Devices" />
 
         <div style={{ marginTop: "auto", opacity: 0.7, fontSize: 12 }}>
